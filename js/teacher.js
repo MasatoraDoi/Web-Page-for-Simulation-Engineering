@@ -39,8 +39,13 @@
       if (res && res.ok && res.active) {
         setActiveLabel(res.sessionName);
         el.sessionName.value = res.sessionName;
+        setStatus('', '');
+      } else if (res && res.ok) {
+        setActiveLabel(null);
+        setStatus('', '');
       } else {
         setActiveLabel(null);
+        setStatus((res && res.error) || '状態の取得に失敗しました', 'error');
       }
     } catch (err) {
       setStatus('状態の取得に失敗しました: ' + err.message, 'error');
