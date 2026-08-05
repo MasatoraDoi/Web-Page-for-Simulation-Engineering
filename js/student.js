@@ -3,12 +3,11 @@
 
   var ID_KEY = 'firefly_student_id';
   var VOL_KEY = 'firefly_volume';
-  var POLL_MS = 8000;
 
   var activeSession = null;
   var sending = false;
-  var refreshing = false;
   var lastSessionError = '';
+  var unsubscribe = null;
 
   var el = {
     setup: document.getElementById('setup-panel'),
@@ -67,7 +66,7 @@
       setStatus(
         el.sessionStatus,
         lastSessionError
-          ? '記録中: ' + activeSession + '（通信不安定・再試行中）'
+          ? '記録中: ' + activeSession + '（通信不安定）'
           : '記録中: ' + activeSession,
         lastSessionError ? 'warn' : 'ok'
       );
@@ -80,36 +79,35 @@
     setStatus(el.sessionStatus, '受付中のセッションはありません（音のみ）', '');
   }
 
-  async function refreshSession() {
+  function applySessionState(res) {
+    if (res && res.ok && res.active && res.sessionName) {
+      activeSession = res.sessionName;
+      lastSessionError = '';
+    } else if (res && res.ok) {
+      activeSession = null;
+      lastSessionError = '';
+    } else if (res && res.transient) {
+      lastSessionError = res.error || '通信が不安定です';
+    } else {
+      activeSession = null;
+      lastSessionError = (res && res.error) || 'セッション状態の取得に失敗しました';
+    }
+    updateSessionUI();
+  }
+
+  function startWatchingSession() {
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
+    }
     if (!FireflyAPI.isConfigured()) {
       activeSession = null;
       lastSessionError = '';
       updateSessionUI();
       return;
     }
-    if (refreshing) return;
-    refreshing = true;
-    try {
-      var res = await FireflyAPI.getActiveSession();
-      if (res && res.ok && res.active && res.sessionName) {
-        activeSession = res.sessionName;
-        lastSessionError = '';
-      } else if (res && res.ok) {
-        activeSession = null;
-        lastSessionError = '';
-      } else if (res && res.transient) {
-        // 一時的な通信失敗では、直前の表示を維持しつつ短く注意を出す
-        lastSessionError = res.error || '通信が不安定です。再試行中…';
-      } else {
-        activeSession = null;
-        lastSessionError = (res && res.error) || 'セッション状態の取得に失敗しました';
-      }
-    } catch (err) {
-      lastSessionError = 'セッション状態の取得に失敗しました';
-    } finally {
-      refreshing = false;
-      updateSessionUI();
-    }
+    setStatus(el.sessionStatus, 'セッションを確認中…', '');
+    unsubscribe = FireflyAPI.subscribeActiveSession(applySessionState);
   }
 
   async function onTap() {
@@ -135,7 +133,7 @@
         updateSessionUI();
       }
     } catch (err) {
-      // 音は出ているので、送信失敗は静かに無視（講義中の操作感を優先）
+      // 音は出しているので、送信失敗は講義中の操作感を優先して無視
     } finally {
       sending = false;
     }
@@ -150,7 +148,7 @@
     localStorage.setItem(ID_KEY, id);
     setStatus(el.setupStatus, '', '');
     showMain(id);
-    refreshSession();
+    startWatchingSession();
   });
 
   el.idInput.addEventListener('keydown', function (e) {
@@ -189,6 +187,5 @@
     showSetup('');
   }
 
-  refreshSession();
-  setInterval(refreshSession, POLL_MS);
+  startWatchingSession();
 })();

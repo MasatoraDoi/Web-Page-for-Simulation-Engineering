@@ -1,5 +1,13 @@
-// Google Apps Script のウェブアプリ URL をここに貼り付けてください
-// 例: 'https://script.google.com/macros/s/XXXXXXXX/exec'
+// Firebase コンソールで発行した設定
 window.APP_CONFIG = {
-  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycby9Z-2dzRIQu-EBByriSBVcya0L1j4oFLRzYi1FVmy6BHuNfNABfh5uywnrEJWvJiMo/exec',
+  FIREBASE: {
+    apiKey: 'AIzaSyBdymsbYr-w4cdMIx0Ovq5fUE2gkof1Sb8',
+    authDomain: 'firefly-sync-faaec.firebaseapp.com',
+    databaseURL: 'https://firefly-sync-faaec-default-rtdb.asia-southeast1.firebasedatabase.app',
+    projectId: 'firefly-sync-faaec',
+    storageBucket: 'firefly-sync-faaec.firebasestorage.app',
+    messagingSenderId: '971987222684',
+    appId: '1:971987222684:web:53b8a6a23de14fb2aa3159',
+    measurementId: 'G-F8JRGSXFCJ',
+  },
 };

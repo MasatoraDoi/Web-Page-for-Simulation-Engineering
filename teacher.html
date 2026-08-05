@@ -17,11 +17,11 @@
       <div class="brand">Teacher</div>
       <h1>セッション管理</h1>
       <p class="lead">
-        セッション名を入力して開始すると、生徒のタップ時刻がスプレッドシートに保存されます。終了を押すと記録を止めます。
+        セッション名を入力して開始すると、生徒のタップ時刻が記録されます。終了を押すと記録を止めます。
       </p>
 
       <p id="config-warn" class="status warn hidden">
-        js/config.js の APPS_SCRIPT_URL が未設定です。README の手順で Google Apps Script を接続してください。
+        js/config.js の Firebase 設定が未入力です。README の手順で Firebase を接続してください。
       </p>
 
       <section class="panel stack">
@@ -47,6 +47,8 @@
 
     </main>
 
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
     <script src="js/config.js"></script>
     <script src="js/api.js"></script>
     <script src="js/teacher.js"></script>

@@ -19,7 +19,7 @@
       <p class="lead">ボタンを押すと音が鳴ります。教員がセッションを開始しているときだけ、押した時刻が記録されます。</p>
 
       <p id="config-warn" class="status warn hidden">
-        記録サーバーが未設定です。音は使えますが、データは保存されません。
+        Firebase が未設定です。音は使えますが、データは保存されません。
       </p>
 
       <section id="setup-panel" class="panel stack">
@@ -58,6 +58,8 @@
 
     </main>
 
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
     <script src="js/config.js"></script>
     <script src="js/api.js"></script>
     <script src="js/sound.js"></script>

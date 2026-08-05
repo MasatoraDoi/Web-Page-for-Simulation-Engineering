@@ -2,6 +2,7 @@
   'use strict';
 
   var SESSION_KEY = 'firefly_last_session_name';
+  var unsubscribe = null;
 
   var el = {
     sessionName: document.getElementById('session-name'),
@@ -28,29 +29,32 @@
     }
   }
 
-  async function refreshActive() {
+  function applySessionState(res) {
+    if (res && res.ok && res.active) {
+      setActiveLabel(res.sessionName);
+      el.sessionName.value = res.sessionName;
+      setStatus('', '');
+    } else if (res && res.ok) {
+      setActiveLabel(null);
+      setStatus('', '');
+    } else if (res && res.transient) {
+      setStatus(res.error || '通信が不安定です', 'warn');
+    } else {
+      setStatus((res && res.error) || '状態の取得に失敗しました', 'error');
+    }
+  }
+
+  function startWatching() {
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
+    }
     if (!FireflyAPI.isConfigured()) {
       setActiveLabel(null);
-      setStatus('APPS_SCRIPT_URL を js/config.js に設定してください', 'warn');
+      setStatus('js/config.js に Firebase 設定を入れてください', 'warn');
       return;
     }
-    try {
-      var res = await FireflyAPI.getActiveSession();
-      if (res && res.ok && res.active) {
-        setActiveLabel(res.sessionName);
-        el.sessionName.value = res.sessionName;
-        setStatus('', '');
-      } else if (res && res.ok) {
-        setActiveLabel(null);
-        setStatus('', '');
-      } else if (res && res.transient) {
-        setStatus((res && res.error) || '通信が不安定です', 'warn');
-      } else {
-        setStatus((res && res.error) || '状態の取得に失敗しました', 'error');
-      }
-    } catch (err) {
-      setStatus('状態の取得に失敗しました: ' + err.message, 'error');
-    }
+    unsubscribe = FireflyAPI.subscribeActiveSession(applySessionState);
   }
 
   el.start.addEventListener('click', async function () {
@@ -60,7 +64,7 @@
       return;
     }
     if (!FireflyAPI.isConfigured()) {
-      setStatus('APPS_SCRIPT_URL が未設定です', 'error');
+      setStatus('Firebase が未設定です', 'error');
       return;
     }
 
@@ -84,7 +88,7 @@
 
   el.end.addEventListener('click', async function () {
     if (!FireflyAPI.isConfigured()) {
-      setStatus('APPS_SCRIPT_URL が未設定です', 'error');
+      setStatus('Firebase が未設定です', 'error');
       return;
     }
     var name = String(el.sessionName.value || '').trim();
@@ -102,12 +106,13 @@
       setStatus('終了に失敗しました: ' + err.message, 'error');
     } finally {
       el.end.disabled = false;
-      refreshActive();
     }
   });
 
-  el.refresh.addEventListener('click', function () {
-    refreshActive();
+  el.refresh.addEventListener('click', async function () {
+    setStatus('更新中…', '');
+    var res = await FireflyAPI.getActiveSession();
+    applySessionState(res);
   });
 
   // init
@@ -118,6 +123,5 @@
   if (last) {
     el.sessionName.value = last;
   }
-  refreshActive();
-  setInterval(refreshActive, 10000);
+  startWatching();
 })();

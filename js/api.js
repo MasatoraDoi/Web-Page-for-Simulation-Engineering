@@ -1,110 +1,265 @@
 (function (global) {
   'use strict';
 
-  // fetch だと Apps Script の 302 リダイレクトでスマホ等がタイムアウトしやすい。
-  // script タグによる JSONP の方が安定する。
-  var REQUEST_TIMEOUT_MS = 20000;
-  var cbSeq = 0;
+  var db = null;
+  var ACTIVE_PATH = 'meta/activeSession';
 
-  function getUrl() {
-    var url = (global.APP_CONFIG && global.APP_CONFIG.APPS_SCRIPT_URL) || '';
-    return String(url).trim();
+  function getFirebaseConfig() {
+    return (global.APP_CONFIG && global.APP_CONFIG.FIREBASE) || null;
   }
 
   function isConfigured() {
-    return getUrl().length > 0;
+    var cfg = getFirebaseConfig();
+    return !!(cfg && cfg.apiKey && cfg.databaseURL && cfg.projectId);
   }
 
-  function request(payload) {
-    var base = getUrl();
-    if (!base) {
-      return Promise.resolve({ ok: false, error: 'APPS_SCRIPT_URL が未設定です' });
+  function sessionKey(sessionName) {
+    return String(sessionName || '')
+      .trim()
+      .replace(/[.#$\[\]\/]/g, '_');
+  }
+
+  function getDb() {
+    if (db) return db;
+    if (!isConfigured()) return null;
+    if (typeof firebase === 'undefined') {
+      throw new Error('Firebase SDK が読み込まれていません');
+    }
+    var cfg = getFirebaseConfig();
+    if (!firebase.apps.length) {
+      firebase.initializeApp(cfg);
+    }
+    db = firebase.database();
+    return db;
+  }
+
+  function notConfigured() {
+    return Promise.resolve({
+      ok: false,
+      error: 'Firebase が未設定です。js/config.js を確認してください。',
+    });
+  }
+
+  function startSession(sessionName) {
+    if (!isConfigured()) return notConfigured();
+    sessionName = String(sessionName || '').trim();
+    if (!sessionName) {
+      return Promise.resolve({ ok: false, error: 'sessionName is required' });
     }
 
-    return new Promise(function (resolve) {
-      cbSeq += 1;
-      var cbName = '_fireflyCb' + Date.now() + '_' + cbSeq;
-      var params = new URLSearchParams();
-      Object.keys(payload || {}).forEach(function (key) {
-        var value = payload[key];
-        if (value == null) return;
-        params.set(key, String(value));
+    var database = getDb();
+    var now = new Date().toISOString();
+    var key = sessionKey(sessionName);
+
+    return database
+      .ref(ACTIVE_PATH)
+      .set({
+        active: true,
+        sessionName: sessionName,
+        sessionKey: key,
+        startedAt: now,
+      })
+      .then(function () {
+        return database.ref('sessions/' + key + '/meta').update({
+          sessionName: sessionName,
+          status: 'active',
+          startedAt: now,
+          endedAt: null,
+        });
+      })
+      .then(function () {
+        return {
+          ok: true,
+          sessionName: sessionName,
+          status: 'active',
+          startedAt: now,
+        };
+      })
+      .catch(function (err) {
+        return { ok: false, error: String(err && err.message ? err.message : err) };
       });
-      params.set('callback', cbName);
-      params.set('_ts', String(Date.now()));
+  }
 
-      var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
-      var script = document.createElement('script');
-      var settled = false;
-      var timer = setTimeout(function () {
-        cleanup();
-        resolve({
+  function endSession(sessionName) {
+    if (!isConfigured()) return notConfigured();
+    var database = getDb();
+    var now = new Date().toISOString();
+    var name = String(sessionName || '').trim();
+
+    return database
+      .ref(ACTIVE_PATH)
+      .once('value')
+      .then(function (snap) {
+        var current = snap.val() || {};
+        var targetName = name || current.sessionName;
+        if (!targetName) {
+          return { ok: false, error: 'No active session to end' };
+        }
+        var key = sessionKey(targetName);
+        return database
+          .ref(ACTIVE_PATH)
+          .set({
+            active: false,
+            sessionName: null,
+            sessionKey: null,
+            startedAt: null,
+            endedAt: now,
+          })
+          .then(function () {
+            return database.ref('sessions/' + key + '/meta').update({
+              status: 'ended',
+              endedAt: now,
+            });
+          })
+          .then(function () {
+            return {
+              ok: true,
+              sessionName: targetName,
+              status: 'ended',
+              endedAt: now,
+            };
+          });
+      })
+      .catch(function (err) {
+        return { ok: false, error: String(err && err.message ? err.message : err) };
+      });
+  }
+
+  function getActiveSession() {
+    if (!isConfigured()) return notConfigured();
+    var database = getDb();
+    return database
+      .ref(ACTIVE_PATH)
+      .once('value')
+      .then(function (snap) {
+        var v = snap.val();
+        if (v && v.active && v.sessionName) {
+          return {
+            ok: true,
+            active: true,
+            sessionName: v.sessionName,
+            startedAt: v.startedAt || null,
+          };
+        }
+        return { ok: true, active: false, sessionName: null };
+      })
+      .catch(function (err) {
+        return {
           ok: false,
-          error:
-            'Apps Script が応答しません（タイムアウト）。しばらくしてから再読み込みしてください。',
+          error: String(err && err.message ? err.message : err),
           transient: true,
-        });
-      }, REQUEST_TIMEOUT_MS);
+        };
+      });
+  }
 
-      function cleanup() {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        try {
-          delete global[cbName];
-        } catch (err) {
-          global[cbName] = undefined;
-        }
-        if (script.parentNode) {
-          script.parentNode.removeChild(script);
-        }
+  /**
+   * 受付中セッションをリアルタイム購読する。
+   * 戻り値: 購読解除関数
+   */
+  function subscribeActiveSession(onChange) {
+    if (!isConfigured()) {
+      onChange({
+        ok: false,
+        error: 'Firebase が未設定です。js/config.js を確認してください。',
+      });
+      return function () {};
+    }
+
+    var database = getDb();
+    var ref = database.ref(ACTIVE_PATH);
+    var handler = function (snap) {
+      var v = snap.val();
+      if (v && v.active && v.sessionName) {
+        onChange({
+          ok: true,
+          active: true,
+          sessionName: v.sessionName,
+          startedAt: v.startedAt || null,
+        });
+      } else {
+        onChange({ ok: true, active: false, sessionName: null });
       }
+    };
+    var errHandler = function (err) {
+      onChange({
+        ok: false,
+        error: String(err && err.message ? err.message : err),
+        transient: true,
+      });
+    };
 
-      global[cbName] = function (data) {
-        cleanup();
-        if (data && typeof data === 'object') {
-          resolve(data);
-        } else {
-          resolve({ ok: false, error: 'Invalid JSONP response', transient: true });
+    ref.on('value', handler, errHandler);
+    return function () {
+      ref.off('value', handler);
+    };
+  }
+
+  function logTap(sessionName, studentId, timestamp) {
+    if (!isConfigured()) return notConfigured();
+    sessionName = String(sessionName || '').trim();
+    studentId = String(studentId || '').trim();
+    timestamp = String(timestamp || '').trim();
+
+    if (!sessionName || !studentId || !timestamp) {
+      return Promise.resolve({
+        ok: false,
+        error: 'sessionName, studentId, timestamp are required',
+      });
+    }
+
+    var database = getDb();
+    var key = sessionKey(sessionName);
+
+    return database
+      .ref(ACTIVE_PATH)
+      .once('value')
+      .then(function (snap) {
+        var v = snap.val();
+        if (!v || !v.active || v.sessionName !== sessionName) {
+          return { ok: false, error: 'Session is not active', skipped: true };
         }
-      };
 
-      script.onerror = function () {
-        cleanup();
-        resolve({
+        var recordedAt = new Date().toISOString();
+        return database
+          .ref('sessions/' + key + '/taps')
+          .push({
+            studentId: studentId,
+            timestamp: timestamp,
+            recordedAt: recordedAt,
+          })
+          .then(function () {
+            return {
+              ok: true,
+              sessionName: sessionName,
+              studentId: studentId,
+              timestamp: timestamp,
+            };
+          });
+      })
+      .catch(function (err) {
+        return {
           ok: false,
-          error: '通信に失敗しました。ネットワーク状態を確認して再試行してください。',
+          error: String(err && err.message ? err.message : err),
           transient: true,
-        });
-      };
+        };
+      });
+  }
 
-      script.async = true;
-      script.src = url;
-      document.head.appendChild(script);
+  function ping() {
+    if (!isConfigured()) return notConfigured();
+    return getActiveSession().then(function (res) {
+      if (res && res.ok) return { ok: true, message: 'ok' };
+      return res;
     });
   }
 
   global.FireflyAPI = {
     isConfigured: isConfigured,
-    ping: function () {
-      return request({ action: 'ping' });
-    },
-    startSession: function (sessionName) {
-      return request({ action: 'startSession', sessionName: sessionName });
-    },
-    endSession: function (sessionName) {
-      return request({ action: 'endSession', sessionName: sessionName });
-    },
-    getActiveSession: function () {
-      return request({ action: 'getActiveSession' });
-    },
-    logTap: function (sessionName, studentId, timestamp) {
-      return request({
-        action: 'logTap',
-        sessionName: sessionName,
-        studentId: studentId,
-        timestamp: timestamp,
-      });
-    },
+    ping: ping,
+    startSession: startSession,
+    endSession: endSession,
+    getActiveSession: getActiveSession,
+    subscribeActiveSession: subscribeActiveSession,
+    logTap: logTap,
   };
 })(window);

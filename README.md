@@ -1,136 +1,124 @@
-# ホタル共振デモ（GitHub Pages + Google スプレッドシート）
+# ホタル共振デモ（GitHub Pages + Firebase）
 
-講義用アプリです。生徒がボタンを押すと音が鳴り、教員が開始したセッション中だけタップ時刻が Google スプレッドシートに保存されます。
+講義用アプリです。生徒がボタンを押すと音が鳴り、教員が開始したセッション中だけタップ時刻が Firebase Realtime Database に保存されます。
+
+> 以前の Google Apps Script + スプレッドシート方式は通信が不安定だったため、保存先を Firebase に切り替えました。  
+> `apps-script/` は参考用の旧実装です（使用しません）。
 
 ## できること
 
-- **生徒**（`index.html`）: 初回だけ数字 ID を入力 → ボタンと音量スライダー。受付中セッションがあるときだけ記録
+- **生徒**（`index.html`）: 初回だけ数字 ID → ボタンと音量。受付中セッションがあるときだけ記録
 - **教員**（`teacher.html`）: セッション名を入力して開始 / 終了
+- セッション状態は **リアルタイム同期**（ポーリング不要）
 
-## なぜスプレッドシートに書けるのか
-
-GitHub Pages は静的サイトなので、スプレッドシートへ**直接**は書き込めません。  
-代わりに **Google Apps Script のウェブアプリ**を用意し、ページからそこに `POST` します。Apps Script がスプレッドシートへ追記します。
+## 全体構成
 
 ```
 生徒/教員のブラウザ（GitHub Pages）
-        │  fetch
+        │  Firebase JS SDK
         ▼
-Google Apps Script（ウェブアプリ URL）
-        │
-        ▼
-Google スプレッドシート
-  - Sessions（開始/終了）
-  - Taps（誰がいつ押したか）
+Firebase Realtime Database
+  meta/activeSession          … いま受付中か
+  sessions/{name}/meta        … 開始・終了
+  sessions/{name}/taps/{id}   … studentId / timestamp / recordedAt
 ```
+
+可視化や CSV 書き出しは、あとで別に決めます。当面は Firebase コンソールで確認できます。
 
 ## セットアップ手順
 
-### 1. スプレッドシートと Apps Script
+### 1. Firebase プロジェクトを作る
 
-1. [Google スプレッドシート](https://sheets.google.com) で新規作成
-2. **拡張機能 → Apps Script**
-3. エディタのコードをすべて消し、リポジトリの `apps-script/Code.gs` の内容を貼り付けて保存
-4. **デプロイ → 新しいデプロイ**
-   - 種類の選択: **ウェブアプリ**
-   - 説明: 任意（例: firefly v1）
-   - 次のユーザーとして実行: **自分**
-   - アクセスできるユーザー: **全員**
-5. デプロイ後に表示される **ウェブアプリ URL** をコピー
+1. [Firebase Console](https://console.firebase.google.com/) を開く（個人 Google アカウントで可）
+2. **プロジェクトを追加**（例: `firefly-sync`）
+3. 左メニュー **Build → Realtime Database → データベースを作成**
+   - 場所: 近いリージョン（例: `asia-southeast1`）
+   - 最初は **ロックモード** でも、次のルールで上書きします
 
-> コードを直したら、再度「デプロイ → デプロイを管理 → 編集（鉛筆）→ 新バージョン」で更新してください。URL は同じままでも、バージョンを上げないと反映されないことがあります。
+### 2. セキュリティルール
 
-### 2. このリポジトリ側の設定
+Realtime Database の **ルール** タブで、講義用の簡易ルールを設定して公開します。
 
-`js/config.js` を開き、URL を貼ります。
+```json
+{
+  "rules": {
+    "meta": {
+      "activeSession": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "sessions": {
+      "$sessionKey": {
+        ".read": true,
+        ".write": true
+      }
+    }
+  }
+}
+```
+
+> URL が分かると誰でも読み書きできます。講義用の使い捨てプロジェクトにし、終わったらルールを締めるかプロジェクトを削除してください。
+
+### 3. Web アプリ設定を取得
+
+1. プロジェクト概要の横 **</>**（ウェブアプリを追加）
+2. ニックネーム例: `github-pages`
+3. 表示される `firebaseConfig` の値を控える
+
+### 4. このリポジトリの設定
+
+`js/config.js` に貼ります。
 
 ```js
 window.APP_CONFIG = {
-  APPS_SCRIPT_URL: 'https://script.google.com/macros/s/XXXX/exec',
+  FIREBASE: {
+    apiKey: '...',
+    authDomain: '...',
+    databaseURL: 'https://xxxx.firebaseio.com', // または https://xxxx.firebasedatabase.app
+    projectId: '...',
+    storageBucket: '...',
+    messagingSenderId: '...',
+    appId: '...',
+  },
 };
 ```
 
-### 3. GitHub Pages で公開
+`databaseURL` が空だと動きません。Realtime Database の「データ」タブ上部の URL を確認してください。
 
-1. このリポジトリを GitHub に push
-2. リポジトリの **Settings → Pages**
-3. Source を **Deploy from a branch** にし、`main`（または `docs`）の `/ (root)` を選択
-4. 数分待つと次の URL で公開されます。
-   - 生徒用: `https://<user>.github.io/<repo>/`
-   - 教員用: `https://<user>.github.io/<repo>/teacher.html`
+### 5. GitHub Pages で公開
 
-生徒ページと教員ページのあいだにリンクはありません。教員用 URL は生徒に共有しないでください。
+1. 変更を commit / push
+2. **Settings → Pages** で `main` / `/ (root)` を公開
+3. 生徒: `https://<user>.github.io/<repo>/`
+4. 教員: `https://<user>.github.io/<repo>/teacher.html`（生徒に共有しない）
 
-## シートの見方
+## データの見方（当面）
 
-| シート | 内容 |
-|---|---|
-| `Sessions` | sessionName / status(`active` or `ended`) / startedAt / endedAt |
-| **セッション名と同名のシート**（例: `test1`） | studentId / timestamp / recordedAt |
+Firebase Console → Realtime Database → データ
 
-教員がセッションを開始すると、セッション名のタブが自動作成されます。タップ記録はそこに追記されます。
+例:
 
-あとで「誰がいつ押したか」は、そのセッション名のシートを開いて確認します。
+```
+sessions
+  test1
+    meta: { status, startedAt, endedAt, sessionName }
+    taps
+      -Nxxxx: { studentId, timestamp, recordedAt }
+```
 
-### グラフにするとき（横軸=時刻、縦軸=studentId）
-
-**`timestamp` を使ってください。** 生徒端末でボタンを押した瞬間の時刻です。
-
-| 列 | 意味 |
-|---|---|
-| `timestamp` | 押した瞬間（端末の時計）→ 共振の解析向き |
-| `recordedAt` | サーバーが受け取った時刻 → 通信遅延が乗る |
-
-端末の時計が大きくずれていると `timestamp` 同士の比較が狂います。その場合の保険として `recordedAt` もあります。
-
-## 講義での使い方（例）
-
-1. 教員が `teacher.html` でセッション名を入れて **開始**
-2. 生徒がページを開き、出席番号などで ID を入力
-3. 実験中にボタンを押す（音が鳴り、同時に記録）
-4. 教員が **終了**
-5. スプレッドシートの `Taps` を見て解析
+グラフ用の横軸は、これまでどおり **`timestamp`（押した瞬間）** を使ってください。
 
 ## ローカル確認
-
-`config.js` に URL を入れたあと、簡易サーバーで開けます。
 
 ```bash
 python3 -m http.server 8080
 ```
 
-ブラウザで `http://localhost:8080/` と `http://localhost:8080/teacher.html` を開いてください。
+`http://localhost:8080/` と `http://localhost:8080/teacher.html` を開きます。
 
 ## 注意
 
-- 生徒の ID・時刻は Google 側に保存されます。講義用途の範囲で運用してください
-- ウェブアプリを「全員」に公開しているため、URL が知られると書き込み可能です。講義用の使い捨てシートにするか、終了後にデプロイを止めると安心です
-- スマホのブラウザは、最初のタップで音声が有効になる仕様です（本アプリではボタン操作で再生可能です）
-
-## トラブルシュート: Failed to fetch / 状態の取得に失敗
-
-GitHub Pages から叩いたとき、Apps Script が **ログイン必須** だとブラウザは `Failed to fetch` になります（大学アカウントの SSO 画面が返るため）。
-
-### 確認手順
-
-1. Apps Script エディタで **デプロイ → デプロイを管理**
-2. ウェブアプリの設定を確認
-   - **次のユーザーとして実行**: 自分
-   - **アクセスできるユーザー**: **全員**（「広島大学の全員」や「Google アカウントを持つ全員」だと外部ページから失敗しやすい）
-3. コードを直した／設定を変えたあとは、必ず **新バージョン** で再デプロイ
-4. 表示された `/exec` の URL を `js/config.js` に貼り直し（変わった場合）
-5. シークレットウィンドウ（未ログイン）で  
-   `（ウェブアプリURL）?action=ping`  
-   を開き、`{"ok":true,...}` のような JSON が出れば成功。HTML のログイン画面ならまだ非公開です
-
-### 大学アカウントで「全員」が選べない場合
-
-組織ポリシーで匿名公開が禁止されていることがあります。その場合は次のどちらかです。
-
-- **個人の Gmail** でスプレッドシート＋Apps Script を作り直し、その `/exec` URL を使う
-- 別の保存先（Firebase など）に切り替える
-
-### スマホで必ずタイムアウトする場合
-
-ブラウザの `fetch` は Apps Script のリダイレクトと相性が悪く、特にモバイルで失敗しやすいです。  
-このアプリは **JSONP（script タグ）** で通信する実装に切り替えています。`Code.gs` を最新に更新して再デプロイしてください。
+- 生徒 ID・時刻は Firebase に保存されます
+- ルールを公開している間は、URL を知っている人が書き込めます
+- スマホでも Firebase SDK 経由なら、旧 Apps Script のようなタイムアウトは起きにくいです
