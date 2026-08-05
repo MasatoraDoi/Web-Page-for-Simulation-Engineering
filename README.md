@@ -55,7 +55,11 @@ window.APP_CONFIG = {
 1. このリポジトリを GitHub に push
 2. リポジトリの **Settings → Pages**
 3. Source を **Deploy from a branch** にし、`main`（または `docs`）の `/ (root)` を選択
-4. 数分待つと `https://<user>.github.io/<repo>/` で生徒ページ、`.../teacher.html` で教員ページが開きます
+4. 数分待つと次の URL で公開されます。
+   - 生徒用: `https://<user>.github.io/<repo>/`
+   - 教員用: `https://<user>.github.io/<repo>/teacher.html`
+
+生徒ページと教員ページのあいだにリンクはありません。教員用 URL は生徒に共有しないでください。
 
 ## シートの見方
 
