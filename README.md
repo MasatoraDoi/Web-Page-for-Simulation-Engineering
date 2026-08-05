@@ -63,14 +63,25 @@ window.APP_CONFIG = {
 
 ## シートの見方
 
-初回の開始操作で次のシートが自動作成されます。
-
 | シート | 内容 |
 |---|---|
 | `Sessions` | sessionName / status(`active` or `ended`) / startedAt / endedAt |
-| `Taps` | sessionName / studentId / timestamp（生徒端末の時刻） / recordedAt（サーバー受信時刻） |
+| **セッション名と同名のシート**（例: `test1`） | studentId / timestamp / recordedAt |
 
-あとで「誰がいつ押したか」は `Taps` をセッション名でフィルタすると確認できます。
+教員がセッションを開始すると、セッション名のタブが自動作成されます。タップ記録はそこに追記されます。
+
+あとで「誰がいつ押したか」は、そのセッション名のシートを開いて確認します。
+
+### グラフにするとき（横軸=時刻、縦軸=studentId）
+
+**`timestamp` を使ってください。** 生徒端末でボタンを押した瞬間の時刻です。
+
+| 列 | 意味 |
+|---|---|
+| `timestamp` | 押した瞬間（端末の時計）→ 共振の解析向き |
+| `recordedAt` | サーバーが受け取った時刻 → 通信遅延が乗る |
+
+端末の時計が大きくずれていると `timestamp` 同士の比較が狂います。その場合の保険として `recordedAt` もあります。
 
 ## 講義での使い方（例）
 

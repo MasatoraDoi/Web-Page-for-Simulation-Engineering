@@ -8,10 +8,14 @@
  *    - 実行ユーザー: 自分
  *    - アクセスできるユーザー: 全員
  * 4. 発行された URL を js/config.js の APPS_SCRIPT_URL に設定
+ *
+ * シート構成:
+ * - Sessions … セッション一覧（開始/終了）
+ * - （セッション名と同名のシート）… そのセッションのタップ記録
  */
 
 var SESSIONS_SHEET = 'Sessions';
-var TAPS_SHEET = 'Taps';
+var RESERVED_SHEET_NAMES = { Sessions: true };
 
 function doGet(e) {
   return handleRequest(e);
@@ -69,19 +73,43 @@ function getSpreadsheet_() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
-function ensureSheets_() {
+function ensureSessionsSheet_() {
   var ss = getSpreadsheet_();
   var sessions = ss.getSheetByName(SESSIONS_SHEET);
   if (!sessions) {
     sessions = ss.insertSheet(SESSIONS_SHEET);
     sessions.appendRow(['sessionName', 'status', 'startedAt', 'endedAt']);
   }
-  var taps = ss.getSheetByName(TAPS_SHEET);
-  if (!taps) {
-    taps = ss.insertSheet(TAPS_SHEET);
-    taps.appendRow(['sessionName', 'studentId', 'timestamp', 'recordedAt']);
+  return sessions;
+}
+
+/**
+ * スプレッドシートのタブ名として使える形に整える
+ * 禁止文字: \ / ? * [ ]
+ */
+function sanitizeSheetName_(sessionName) {
+  var name = String(sessionName || '').trim();
+  name = name.replace(/[\\\/\?\*\[\]]/g, '_');
+  if (name.length > 100) {
+    name = name.substring(0, 100);
   }
-  return { sessions: sessions, taps: taps };
+  if (!name || RESERVED_SHEET_NAMES[name]) {
+    name = 'session_' + name;
+  }
+  return name;
+}
+
+function ensureTapSheet_(sessionName) {
+  var ss = getSpreadsheet_();
+  var sheetName = sanitizeSheetName_(sessionName);
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.appendRow(['studentId', 'timestamp', 'recordedAt']);
+  } else if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['studentId', 'timestamp', 'recordedAt']);
+  }
+  return { sheet: sheet, sheetName: sheetName };
 }
 
 function startSession_(sessionName) {
@@ -90,16 +118,18 @@ function startSession_(sessionName) {
     return { ok: false, error: 'sessionName is required' };
   }
 
-  var sheets = ensureSheets_();
-  var data = sheets.sessions.getDataRange().getValues();
+  var sessions = ensureSessionsSheet_();
+  ensureTapSheet_(sessionName);
+
+  var data = sessions.getDataRange().getValues();
   var now = new Date().toISOString();
 
   // 既存の active をすべて終了
   for (var i = 1; i < data.length; i++) {
     if (data[i][1] === 'active') {
-      sheets.sessions.getRange(i + 1, 2).setValue('ended');
+      sessions.getRange(i + 1, 2).setValue('ended');
       if (!data[i][3]) {
-        sheets.sessions.getRange(i + 1, 4).setValue(now);
+        sessions.getRange(i + 1, 4).setValue(now);
       }
     }
   }
@@ -107,21 +137,33 @@ function startSession_(sessionName) {
   // 同名セッションがあれば再利用して active に戻す
   for (var j = 1; j < data.length; j++) {
     if (String(data[j][0]) === sessionName) {
-      sheets.sessions.getRange(j + 1, 2).setValue('active');
-      sheets.sessions.getRange(j + 1, 3).setValue(now);
-      sheets.sessions.getRange(j + 1, 4).setValue('');
-      return { ok: true, sessionName: sessionName, status: 'active', startedAt: now };
+      sessions.getRange(j + 1, 2).setValue('active');
+      sessions.getRange(j + 1, 3).setValue(now);
+      sessions.getRange(j + 1, 4).setValue('');
+      return {
+        ok: true,
+        sessionName: sessionName,
+        sheetName: sanitizeSheetName_(sessionName),
+        status: 'active',
+        startedAt: now
+      };
     }
   }
 
-  sheets.sessions.appendRow([sessionName, 'active', now, '']);
-  return { ok: true, sessionName: sessionName, status: 'active', startedAt: now };
+  sessions.appendRow([sessionName, 'active', now, '']);
+  return {
+    ok: true,
+    sessionName: sessionName,
+    sheetName: sanitizeSheetName_(sessionName),
+    status: 'active',
+    startedAt: now
+  };
 }
 
 function endSession_(sessionName) {
   sessionName = String(sessionName || '').trim();
-  var sheets = ensureSheets_();
-  var data = sheets.sessions.getDataRange().getValues();
+  var sessions = ensureSessionsSheet_();
+  var data = sessions.getDataRange().getValues();
   var now = new Date().toISOString();
   var ended = null;
 
@@ -131,8 +173,8 @@ function endSession_(sessionName) {
     if (status !== 'active') continue;
     if (sessionName && name !== sessionName) continue;
 
-    sheets.sessions.getRange(i + 1, 2).setValue('ended');
-    sheets.sessions.getRange(i + 1, 4).setValue(now);
+    sessions.getRange(i + 1, 2).setValue('ended');
+    sessions.getRange(i + 1, 4).setValue(now);
     ended = name;
   }
 
@@ -143,8 +185,8 @@ function endSession_(sessionName) {
 }
 
 function getActiveSession_() {
-  var sheets = ensureSheets_();
-  var data = sheets.sessions.getDataRange().getValues();
+  var sessions = ensureSessionsSheet_();
+  var data = sessions.getDataRange().getValues();
 
   for (var i = data.length - 1; i >= 1; i--) {
     if (data[i][1] === 'active') {
@@ -173,8 +215,14 @@ function logTap_(sessionName, studentId, timestamp) {
     return { ok: false, error: 'Session is not active', skipped: true };
   }
 
-  var sheets = ensureSheets_();
+  var tap = ensureTapSheet_(sessionName);
   var recordedAt = new Date().toISOString();
-  sheets.taps.appendRow([sessionName, studentId, timestamp, recordedAt]);
-  return { ok: true, sessionName: sessionName, studentId: studentId, timestamp: timestamp };
+  tap.sheet.appendRow([studentId, timestamp, recordedAt]);
+  return {
+    ok: true,
+    sessionName: sessionName,
+    sheetName: tap.sheetName,
+    studentId: studentId,
+    timestamp: timestamp
+  };
 }
