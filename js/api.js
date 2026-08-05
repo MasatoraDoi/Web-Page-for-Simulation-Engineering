@@ -253,6 +253,45 @@
     });
   }
 
+  function getSessionTaps(sessionName) {
+    if (!isConfigured()) return notConfigured();
+    sessionName = String(sessionName || '').trim();
+    if (!sessionName) {
+      return Promise.resolve({ ok: false, error: 'sessionName is required' });
+    }
+
+    var database = getDb();
+    var key = sessionKey(sessionName);
+
+    return database
+      .ref('sessions/' + key + '/taps')
+      .once('value')
+      .then(function (snap) {
+        var val = snap.val() || {};
+        var taps = Object.keys(val).map(function (id) {
+          var row = val[id] || {};
+          return {
+            id: id,
+            studentId: row.studentId != null ? String(row.studentId) : '',
+            timestamp: row.timestamp != null ? String(row.timestamp) : '',
+            recordedAt: row.recordedAt != null ? String(row.recordedAt) : '',
+          };
+        });
+        taps.sort(function (a, b) {
+          if (a.timestamp < b.timestamp) return -1;
+          if (a.timestamp > b.timestamp) return 1;
+          return 0;
+        });
+        return { ok: true, sessionName: sessionName, taps: taps };
+      })
+      .catch(function (err) {
+        return {
+          ok: false,
+          error: String(err && err.message ? err.message : err),
+        };
+      });
+  }
+
   global.FireflyAPI = {
     isConfigured: isConfigured,
     ping: ping,
@@ -261,5 +300,6 @@
     getActiveSession: getActiveSession,
     subscribeActiveSession: subscribeActiveSession,
     logTap: logTap,
+    getSessionTaps: getSessionTaps,
   };
 })(window);

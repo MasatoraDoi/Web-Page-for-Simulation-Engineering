@@ -12,6 +12,7 @@
     active: document.getElementById('active-session'),
     configWarn: document.getElementById('config-warn'),
     refresh: document.getElementById('refresh-btn'),
+    csv: document.getElementById('csv-btn'),
   };
 
   function setStatus(message, type) {
@@ -113,6 +114,75 @@
     setStatus('更新中…', '');
     var res = await FireflyAPI.getActiveSession();
     applySessionState(res);
+  });
+
+  function csvEscape(value) {
+    var s = String(value == null ? '' : value);
+    if (/[",\n\r]/.test(s)) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+
+  function downloadCsv(filename, text) {
+    // Excel 向けに UTF-8 BOM を付与
+    var blob = new Blob(['\uFEFF' + text], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function safeFilename(name) {
+    return String(name || 'session').replace(/[\\\/:*?"<>|]/g, '_');
+  }
+
+  el.csv.addEventListener('click', async function () {
+    var name = String(el.sessionName.value || '').trim();
+    if (!name) {
+      setStatus('CSV にするセッション名を入力してください', 'error');
+      return;
+    }
+    if (!FireflyAPI.isConfigured()) {
+      setStatus('Firebase が未設定です', 'error');
+      return;
+    }
+
+    el.csv.disabled = true;
+    setStatus('CSV を作成しています…', '');
+    try {
+      var res = await FireflyAPI.getSessionTaps(name);
+      if (!res || !res.ok) {
+        setStatus((res && res.error) || 'CSV の作成に失敗しました', 'error');
+        return;
+      }
+      var taps = res.taps || [];
+      if (!taps.length) {
+        setStatus('セッション「' + name + '」にタップ記録がありません', 'warn');
+        return;
+      }
+
+      var lines = ['studentId,timestamp,recordedAt'];
+      taps.forEach(function (row) {
+        lines.push(
+          [row.studentId, row.timestamp, row.recordedAt].map(csvEscape).join(',')
+        );
+      });
+
+      downloadCsv(safeFilename(name) + '_taps.csv', lines.join('\n') + '\n');
+      setStatus(
+        'CSV をダウンロードしました（' + taps.length + ' 件 / ' + name + '）',
+        'ok'
+      );
+    } catch (err) {
+      setStatus('CSV の作成に失敗しました: ' + err.message, 'error');
+    } finally {
+      el.csv.disabled = false;
+    }
   });
 
   // init

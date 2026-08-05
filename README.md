@@ -95,6 +95,8 @@ window.APP_CONFIG = {
 
 ## データの見方（当面）
 
+### Firebase コンソール
+
 Firebase Console → Realtime Database → データ
 
 例:
@@ -107,7 +109,15 @@ sessions
       -Nxxxx: { studentId, timestamp, recordedAt }
 ```
 
-グラフ用の横軸は、これまでどおり **`timestamp`（押した瞬間）** を使ってください。
+### CSV ダウンロード（教員ページ）
+
+`teacher.html` の **CSVダウンロード** で、入力中のセッション名のタップ記録を保存できます。
+
+- 列: `studentId,timestamp,recordedAt`
+- `timestamp` 昇順
+- Excel 向け UTF-8 BOM 付き
+
+グラフ用の横軸は **`timestamp`（押した瞬間）** を使ってください。
 
 ## ローカル確認
 
