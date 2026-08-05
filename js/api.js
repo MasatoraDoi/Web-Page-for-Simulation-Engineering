@@ -1,8 +1,10 @@
 (function (global) {
   'use strict';
 
-  // Apps Script は 302 → googleusercontent のリダイレクトがあり、環境によって遅い
-  var REQUEST_TIMEOUT_MS = 25000;
+  // fetch だと Apps Script の 302 リダイレクトでスマホ等がタイムアウトしやすい。
+  // script タグによる JSONP の方が安定する。
+  var REQUEST_TIMEOUT_MS = 20000;
+  var cbSeq = 0;
 
   function getUrl() {
     var url = (global.APP_CONFIG && global.APP_CONFIG.APPS_SCRIPT_URL) || '';
@@ -13,130 +15,73 @@
     return getUrl().length > 0;
   }
 
-  function sleep(ms) {
-    return new Promise(function (resolve) {
-      setTimeout(resolve, ms);
-    });
-  }
-
-  async function fetchAppsScript(url, signal) {
-    // まず manual で Location を取り、本体 URL を直接叩く（follow のハング回避）
-    var first = await fetch(url, {
-      method: 'GET',
-      redirect: 'manual',
-      cache: 'no-store',
-      signal: signal,
-    });
-
-    var target = null;
-    if (first.status >= 300 && first.status < 400) {
-      target = first.headers.get('Location');
-    }
-
-    if (target) {
-      var second = await fetch(target, {
-        method: 'GET',
-        redirect: 'follow',
-        cache: 'no-store',
-        signal: signal,
-      });
-      return second.text();
-    }
-
-    // Location が読めない／リダイレクトなしの場合は従来どおり
-    if (first.type === 'opaqueredirect' || first.status === 0) {
-      var followed = await fetch(url, {
-        method: 'GET',
-        redirect: 'follow',
-        cache: 'no-store',
-        signal: signal,
-      });
-      return followed.text();
-    }
-
-    return first.text();
-  }
-
-  async function fetchOnce(url) {
-    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var timer = null;
-    if (controller) {
-      timer = setTimeout(function () {
-        controller.abort();
-      }, REQUEST_TIMEOUT_MS);
-    }
-
-    try {
-      var text = await fetchAppsScript(url, controller ? controller.signal : undefined);
-      return { ok: true, text: text };
-    } catch (err) {
-      return { ok: false, err: err };
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
-  async function request(payload) {
+  function request(payload) {
     var base = getUrl();
     if (!base) {
-      return { ok: false, error: 'APPS_SCRIPT_URL が未設定です' };
+      return Promise.resolve({ ok: false, error: 'APPS_SCRIPT_URL が未設定です' });
     }
 
-    var params = new URLSearchParams();
-    Object.keys(payload || {}).forEach(function (key) {
-      var value = payload[key];
-      if (value == null) return;
-      params.set(key, String(value));
-    });
-    params.set('_ts', String(Date.now()));
+    return new Promise(function (resolve) {
+      cbSeq += 1;
+      var cbName = '_fireflyCb' + Date.now() + '_' + cbSeq;
+      var params = new URLSearchParams();
+      Object.keys(payload || {}).forEach(function (key) {
+        var value = payload[key];
+        if (value == null) return;
+        params.set(key, String(value));
+      });
+      params.set('callback', cbName);
+      params.set('_ts', String(Date.now()));
 
-    var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
-
-    var attempt = await fetchOnce(url);
-    if (!attempt.ok) {
-      if (attempt.err && attempt.err.name === 'AbortError') {
-        return {
+      var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+      var script = document.createElement('script');
+      var settled = false;
+      var timer = setTimeout(function () {
+        cleanup();
+        resolve({
           ok: false,
           error:
             'Apps Script が応答しません（タイムアウト）。しばらくしてから再読み込みしてください。',
           transient: true,
-        };
-      }
-      return {
-        ok: false,
-        error: '通信に失敗しました。ネットワーク状態を確認して再試行してください。',
-        transient: true,
-      };
-    }
+        });
+      }, REQUEST_TIMEOUT_MS);
 
-    var text = attempt.text;
-    if (/^\s*</.test(text)) {
-      await sleep(400);
-      params.set('_ts', String(Date.now()));
-      url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
-      attempt = await fetchOnce(url);
-      if (!attempt.ok) {
-        return {
+      function cleanup() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          delete global[cbName];
+        } catch (err) {
+          global[cbName] = undefined;
+        }
+        if (script.parentNode) {
+          script.parentNode.removeChild(script);
+        }
+      }
+
+      global[cbName] = function (data) {
+        cleanup();
+        if (data && typeof data === 'object') {
+          resolve(data);
+        } else {
+          resolve({ ok: false, error: 'Invalid JSONP response', transient: true });
+        }
+      };
+
+      script.onerror = function () {
+        cleanup();
+        resolve({
           ok: false,
           error: '通信に失敗しました。ネットワーク状態を確認して再試行してください。',
           transient: true,
-        };
-      }
-      text = attempt.text;
-      if (/^\s*</.test(text)) {
-        return {
-          ok: false,
-          error: 'サーバーが一時的に不正な応答を返しました。自動で再試行します。',
-          transient: true,
-        };
-      }
-    }
+        });
+      };
 
-    try {
-      return JSON.parse(text);
-    } catch (err) {
-      return { ok: false, error: 'Invalid JSON response', raw: text.slice(0, 200), transient: true };
-    }
+      script.async = true;
+      script.src = url;
+      document.head.appendChild(script);
+    });
   }
 
   global.FireflyAPI = {

@@ -130,4 +130,7 @@ GitHub Pages から叩いたとき、Apps Script が **ログイン必須** だ�
 - **個人の Gmail** でスプレッドシート＋Apps Script を作り直し、その `/exec` URL を使う
 - 別の保存先（Firebase など）に切り替える
 
-URL に `/a/macros/hiroshima-u.ac.jp/` が入っている場合は大学 Workspace 配下です。個人 Gmail だと通常 `https://script.google.com/macros/s/.../exec` の形になります。
+### スマホで必ずタイムアウトする場合
+
+ブラウザの `fetch` は Apps Script のリダイレクトと相性が悪く、特にモバイルで失敗しやすいです。  
+このアプリは **JSONP（script タグ）** で通信する実装に切り替えています。`Code.gs` を最新に更新して再デプロイしてください。

@@ -28,14 +28,19 @@ function doPost(e) {
 }
 
 function handleRequest(e) {
-  try {
-    var params = {};
-    if (e && e.postData && e.postData.contents) {
+  var params = {};
+  if (e && e.postData && e.postData.contents) {
+    try {
       params = JSON.parse(e.postData.contents);
-    } else if (e && e.parameter) {
-      params = e.parameter;
+    } catch (err) {
+      params = (e && e.parameter) || {};
     }
+  } else if (e && e.parameter) {
+    params = e.parameter;
+  }
 
+  var callback = params.callback || '';
+  try {
     var action = params.action || '';
     var result;
 
@@ -59,15 +64,29 @@ function handleRequest(e) {
         result = { ok: false, error: 'Unknown action: ' + action };
     }
 
-    return jsonResponse_(result);
+    return jsonResponse_(result, callback);
   } catch (err) {
-    return jsonResponse_({ ok: false, error: String(err) });
+    return jsonResponse_({ ok: false, error: String(err) }, callback);
   }
 }
 
-function jsonResponse_(obj) {
+function sanitizeCallback_(name) {
+  name = String(name || '');
+  // JSONP 用。任意コード実行を避けるため英数字と _ のみ許可
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return '';
+  return name;
+}
+
+function jsonResponse_(obj, callback) {
+  var cb = sanitizeCallback_(callback);
+  var body = JSON.stringify(obj);
+  if (cb) {
+    return ContentService
+      .createTextOutput(cb + '(' + body + ')')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
   return ContentService
-    .createTextOutput(JSON.stringify(obj))
+    .createTextOutput(body)
     .setMimeType(ContentService.MimeType.JSON);
 }
 
