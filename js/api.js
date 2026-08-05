@@ -1,6 +1,8 @@
 (function (global) {
   'use strict';
 
+  var REQUEST_TIMEOUT_MS = 12000;
+
   function getUrl() {
     var url = (global.APP_CONFIG && global.APP_CONFIG.APPS_SCRIPT_URL) || '';
     return String(url).trim();
@@ -25,18 +27,36 @@
     });
     var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
 
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = null;
+    if (controller) {
+      timer = setTimeout(function () {
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
+    }
+
     var response;
     try {
       response = await fetch(url, {
         method: 'GET',
         redirect: 'follow',
+        signal: controller ? controller.signal : undefined,
       });
     } catch (err) {
+      if (err && err.name === 'AbortError') {
+        return {
+          ok: false,
+          error:
+            'Apps Script が応答しません（タイムアウト）。デプロイ URL か「全員」公開設定を確認してください。',
+        };
+      }
       return {
         ok: false,
         error:
           '通信に失敗しました（Failed to fetch）。Apps Script の公開設定が「全員」になっていないか、大学アカウント制限の可能性があります。README のトラブルシュートを確認してください。',
       };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
 
     var text = await response.text();
@@ -44,7 +64,7 @@
       return {
         ok: false,
         error:
-          'Apps Script がログイン画面を返しました。ウェブアプリの「アクセスできるユーザー」を「全員」にし、新しいデプロイ版を発行してください。',
+          'Apps Script がログイン画面／エラーページを返しました。ウェブアプリの「アクセスできるユーザー」を「全員」にし、新しいデプロイの /exec URL を config.js に反映してください。',
       };
     }
     try {

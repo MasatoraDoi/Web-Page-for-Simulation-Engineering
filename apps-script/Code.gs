@@ -16,6 +16,8 @@
 
 var SESSIONS_SHEET = 'Sessions';
 var RESERVED_SHEET_NAMES = { Sessions: true };
+var ACTIVE_CACHE_KEY = 'activeSessionV1';
+var ACTIVE_CACHE_TTL_SEC = 21600; // 6 hours
 
 function doGet(e) {
   return handleRequest(e);
@@ -73,6 +75,45 @@ function getSpreadsheet_() {
   return SpreadsheetApp.getActiveSpreadsheet();
 }
 
+function getCache_() {
+  return CacheService.getScriptCache();
+}
+
+function setActiveCache_(sessionName, startedAt) {
+  getCache_().put(
+    ACTIVE_CACHE_KEY,
+    JSON.stringify({ sessionName: sessionName, startedAt: startedAt }),
+    ACTIVE_CACHE_TTL_SEC
+  );
+}
+
+function clearActiveCache_() {
+  getCache_().remove(ACTIVE_CACHE_KEY);
+}
+
+function readActiveCache_() {
+  var raw = getCache_().get(ACTIVE_CACHE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return null;
+  }
+}
+
+function withSheetLock_(fn) {
+  var lock = LockService.getScriptLock();
+  var got = lock.tryLock(5000);
+  if (!got) {
+    throw new Error('Spreadsheet is busy. Retry shortly.');
+  }
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function ensureSessionsSheet_() {
   var ss = getSpreadsheet_();
   var sessions = ss.getSheetByName(SESSIONS_SHEET);
@@ -118,39 +159,44 @@ function startSession_(sessionName) {
     return { ok: false, error: 'sessionName is required' };
   }
 
-  var sessions = ensureSessionsSheet_();
-  ensureTapSheet_(sessionName);
-
-  var data = sessions.getDataRange().getValues();
   var now = new Date().toISOString();
 
-  // 既存の active をすべて終了
-  for (var i = 1; i < data.length; i++) {
-    if (data[i][1] === 'active') {
-      sessions.getRange(i + 1, 2).setValue('ended');
-      if (!data[i][3]) {
-        sessions.getRange(i + 1, 4).setValue(now);
+  withSheetLock_(function () {
+    var sessions = ensureSessionsSheet_();
+    ensureTapSheet_(sessionName);
+
+    var data = sessions.getDataRange().getValues();
+
+    // 既存の active をすべて終了
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][1] === 'active') {
+        sessions.getRange(i + 1, 2).setValue('ended');
+        if (!data[i][3]) {
+          sessions.getRange(i + 1, 4).setValue(now);
+        }
       }
     }
-  }
 
-  // 同名セッションがあれば再利用して active に戻す
-  for (var j = 1; j < data.length; j++) {
-    if (String(data[j][0]) === sessionName) {
-      sessions.getRange(j + 1, 2).setValue('active');
-      sessions.getRange(j + 1, 3).setValue(now);
-      sessions.getRange(j + 1, 4).setValue('');
-      return {
-        ok: true,
-        sessionName: sessionName,
-        sheetName: sanitizeSheetName_(sessionName),
-        status: 'active',
-        startedAt: now
-      };
+    // 同名セッションがあれば再利用して active に戻す
+    var reused = false;
+    for (var j = 1; j < data.length; j++) {
+      if (String(data[j][0]) === sessionName) {
+        sessions.getRange(j + 1, 2).setValue('active');
+        sessions.getRange(j + 1, 3).setValue(now);
+        sessions.getRange(j + 1, 4).setValue('');
+        reused = true;
+        break;
+      }
     }
-  }
 
-  sessions.appendRow([sessionName, 'active', now, '']);
+    if (!reused) {
+      sessions.appendRow([sessionName, 'active', now, '']);
+    }
+
+    SpreadsheetApp.flush();
+  });
+
+  setActiveCache_(sessionName, now);
   return {
     ok: true,
     sessionName: sessionName,
@@ -162,21 +208,28 @@ function startSession_(sessionName) {
 
 function endSession_(sessionName) {
   sessionName = String(sessionName || '').trim();
-  var sessions = ensureSessionsSheet_();
-  var data = sessions.getDataRange().getValues();
   var now = new Date().toISOString();
   var ended = null;
 
-  for (var i = 1; i < data.length; i++) {
-    var name = String(data[i][0]);
-    var status = data[i][1];
-    if (status !== 'active') continue;
-    if (sessionName && name !== sessionName) continue;
+  withSheetLock_(function () {
+    var sessions = ensureSessionsSheet_();
+    var data = sessions.getDataRange().getValues();
 
-    sessions.getRange(i + 1, 2).setValue('ended');
-    sessions.getRange(i + 1, 4).setValue(now);
-    ended = name;
-  }
+    for (var i = 1; i < data.length; i++) {
+      var name = String(data[i][0]);
+      var status = data[i][1];
+      if (status !== 'active') continue;
+      if (sessionName && name !== sessionName) continue;
+
+      sessions.getRange(i + 1, 2).setValue('ended');
+      sessions.getRange(i + 1, 4).setValue(now);
+      ended = name;
+    }
+
+    SpreadsheetApp.flush();
+  });
+
+  clearActiveCache_();
 
   if (!ended) {
     return { ok: false, error: 'No active session to end' };
@@ -185,20 +238,55 @@ function endSession_(sessionName) {
 }
 
 function getActiveSession_() {
-  var sessions = ensureSessionsSheet_();
-  var data = sessions.getDataRange().getValues();
-
-  for (var i = data.length - 1; i >= 1; i--) {
-    if (data[i][1] === 'active') {
-      return {
-        ok: true,
-        active: true,
-        sessionName: String(data[i][0]),
-        startedAt: data[i][2] ? new Date(data[i][2]).toISOString() : null
-      };
-    }
+  // 生徒のポーリングはシートを叩かずキャッシュ優先（ロック待ちで固まりやすいため）
+  var cached = readActiveCache_();
+  if (cached && cached.sessionName) {
+    return {
+      ok: true,
+      active: true,
+      sessionName: String(cached.sessionName),
+      startedAt: cached.startedAt || null,
+      source: 'cache'
+    };
   }
-  return { ok: true, active: false, sessionName: null };
+
+  // キャッシュが空のときだけシートを確認
+  var fromSheet = null;
+  try {
+    fromSheet = withSheetLock_(function () {
+      var ss = getSpreadsheet_();
+      var sessions = ss.getSheetByName(SESSIONS_SHEET);
+      if (!sessions) {
+        return { ok: true, active: false, sessionName: null, source: 'sheet' };
+      }
+      var data = sessions.getDataRange().getValues();
+      for (var i = data.length - 1; i >= 1; i--) {
+        if (data[i][1] === 'active') {
+          var name = String(data[i][0]);
+          var startedAt = data[i][2] ? new Date(data[i][2]).toISOString() : null;
+          setActiveCache_(name, startedAt);
+          return {
+            ok: true,
+            active: true,
+            sessionName: name,
+            startedAt: startedAt,
+            source: 'sheet'
+          };
+        }
+      }
+      return { ok: true, active: false, sessionName: null, source: 'sheet' };
+    });
+  } catch (err) {
+    return {
+      ok: true,
+      active: false,
+      sessionName: null,
+      warning: String(err),
+      source: 'lock-timeout'
+    };
+  }
+
+  return fromSheet;
 }
 
 function logTap_(sessionName, studentId, timestamp) {
@@ -210,18 +298,29 @@ function logTap_(sessionName, studentId, timestamp) {
     return { ok: false, error: 'sessionName, studentId, timestamp are required' };
   }
 
-  var active = getActiveSession_();
-  if (!active.active || active.sessionName !== sessionName) {
-    return { ok: false, error: 'Session is not active', skipped: true };
+  var cached = readActiveCache_();
+  if (!cached || cached.sessionName !== sessionName) {
+    // キャッシュが無い/不一致ならシート確認にフォールバック
+    var active = getActiveSession_();
+    if (!active.active || active.sessionName !== sessionName) {
+      return { ok: false, error: 'Session is not active', skipped: true };
+    }
   }
 
-  var tap = ensureTapSheet_(sessionName);
   var recordedAt = new Date().toISOString();
-  tap.sheet.appendRow([studentId, timestamp, recordedAt]);
+  var sheetName = sanitizeSheetName_(sessionName);
+
+  withSheetLock_(function () {
+    var tap = ensureTapSheet_(sessionName);
+    sheetName = tap.sheetName;
+    tap.sheet.appendRow([studentId, timestamp, recordedAt]);
+    SpreadsheetApp.flush();
+  });
+
   return {
     ok: true,
     sessionName: sessionName,
-    sheetName: tap.sheetName,
+    sheetName: sheetName,
     studentId: studentId,
     timestamp: timestamp
   };

@@ -3,10 +3,12 @@
 
   var ID_KEY = 'firefly_student_id';
   var VOL_KEY = 'firefly_volume';
-  var POLL_MS = 3000;
+  var POLL_MS = 5000;
 
   var activeSession = null;
   var sending = false;
+  var refreshing = false;
+  var lastSessionError = '';
 
   var el = {
     setup: document.getElementById('setup-panel'),
@@ -61,6 +63,10 @@
       setStatus(el.sessionStatus, '記録サーバー未設定（音のみ）', 'warn');
       return;
     }
+    if (lastSessionError) {
+      setStatus(el.sessionStatus, lastSessionError, 'error');
+      return;
+    }
     if (activeSession) {
       setStatus(
         el.sessionStatus,
@@ -75,21 +81,32 @@
   async function refreshSession() {
     if (!FireflyAPI.isConfigured()) {
       activeSession = null;
+      lastSessionError = '';
       updateSessionUI();
       return;
     }
+    if (refreshing) return;
+    refreshing = true;
     try {
       var res = await FireflyAPI.getActiveSession();
       if (res && res.ok && res.active && res.sessionName) {
         activeSession = res.sessionName;
+        lastSessionError = '';
+      } else if (res && res.ok) {
+        activeSession = null;
+        lastSessionError = '';
       } else {
         activeSession = null;
+        lastSessionError = (res && res.error) || 'セッション状態の取得に失敗しました';
       }
     } catch (err) {
       // 通信失敗時は前回の状態を維持せず、送信しない方に倒す
       activeSession = null;
+      lastSessionError = 'セッション状態の取得に失敗しました';
+    } finally {
+      refreshing = false;
+      updateSessionUI();
     }
-    updateSessionUI();
   }
 
   async function onTap() {

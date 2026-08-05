@@ -118,5 +118,5 @@
     el.sessionName.value = last;
   }
   refreshActive();
-  setInterval(refreshActive, 4000);
+  setInterval(refreshActive, 8000);
 })();
