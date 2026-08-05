@@ -11,19 +11,24 @@
   }
 
   async function request(payload) {
-    var url = getUrl();
-    if (!url) {
+    var base = getUrl();
+    if (!base) {
       return { ok: false, error: 'APPS_SCRIPT_URL が未設定です' };
     }
 
+    // 個人 Gmail のウェブアプリでも POST が 405 になることがあるため GET を使う
+    var params = new URLSearchParams();
+    Object.keys(payload || {}).forEach(function (key) {
+      var value = payload[key];
+      if (value == null) return;
+      params.set(key, String(value));
+    });
+    var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+
     var response;
     try {
-      // Apps Script はリダイレクトするため text で受け取り JSON を自分でパースする
       response = await fetch(url, {
-        method: 'POST',
-        // text/plain にすると CORS プリフライトを避けやすい
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload),
+        method: 'GET',
         redirect: 'follow',
       });
     } catch (err) {
