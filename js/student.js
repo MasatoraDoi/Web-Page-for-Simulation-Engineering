@@ -63,19 +63,21 @@
       setStatus(el.sessionStatus, '記録サーバー未設定（音のみ）', 'warn');
       return;
     }
-    if (lastSessionError) {
-      setStatus(el.sessionStatus, lastSessionError, 'error');
-      return;
-    }
     if (activeSession) {
       setStatus(
         el.sessionStatus,
-        '記録中: ' + activeSession,
-        'ok'
+        lastSessionError
+          ? '記録中: ' + activeSession + '（通信不安定・再試行中）'
+          : '記録中: ' + activeSession,
+        lastSessionError ? 'warn' : 'ok'
       );
-    } else {
-      setStatus(el.sessionStatus, '受付中のセッションはありません（音のみ）', '');
+      return;
     }
+    if (lastSessionError) {
+      setStatus(el.sessionStatus, lastSessionError, 'warn');
+      return;
+    }
+    setStatus(el.sessionStatus, '受付中のセッションはありません（音のみ）', '');
   }
 
   async function refreshSession() {
@@ -95,13 +97,14 @@
       } else if (res && res.ok) {
         activeSession = null;
         lastSessionError = '';
+      } else if (res && res.transient) {
+        // 一時的な通信失敗では、直前の表示を維持しつつ短く注意を出す
+        lastSessionError = res.error || '通信が不安定です。再試行中…';
       } else {
         activeSession = null;
         lastSessionError = (res && res.error) || 'セッション状態の取得に失敗しました';
       }
     } catch (err) {
-      // 通信失敗時は前回の状態を維持せず、送信しない方に倒す
-      activeSession = null;
       lastSessionError = 'セッション状態の取得に失敗しました';
     } finally {
       refreshing = false;

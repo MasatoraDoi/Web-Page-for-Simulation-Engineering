@@ -16,7 +16,7 @@
 
 var SESSIONS_SHEET = 'Sessions';
 var RESERVED_SHEET_NAMES = { Sessions: true };
-var ACTIVE_CACHE_KEY = 'activeSessionV1';
+var ACTIVE_CACHE_KEY = 'activeSessionV2';
 var ACTIVE_CACHE_TTL_SEC = 21600; // 6 hours
 
 function doGet(e) {
@@ -82,13 +82,28 @@ function getCache_() {
 function setActiveCache_(sessionName, startedAt) {
   getCache_().put(
     ACTIVE_CACHE_KEY,
-    JSON.stringify({ sessionName: sessionName, startedAt: startedAt }),
+    JSON.stringify({
+      active: true,
+      sessionName: sessionName,
+      startedAt: startedAt,
+      updatedAt: new Date().toISOString()
+    }),
     ACTIVE_CACHE_TTL_SEC
   );
 }
 
-function clearActiveCache_() {
-  getCache_().remove(ACTIVE_CACHE_KEY);
+function setInactiveCache_() {
+  // remove だと「キャッシュなし→シート再読込」になり、終了直後や競合で古い active を拾い直すことがある
+  getCache_().put(
+    ACTIVE_CACHE_KEY,
+    JSON.stringify({
+      active: false,
+      sessionName: null,
+      startedAt: null,
+      updatedAt: new Date().toISOString()
+    }),
+    ACTIVE_CACHE_TTL_SEC
+  );
 }
 
 function readActiveCache_() {
@@ -229,7 +244,7 @@ function endSession_(sessionName) {
     SpreadsheetApp.flush();
   });
 
-  clearActiveCache_();
+  setInactiveCache_();
 
   if (!ended) {
     return { ok: false, error: 'No active session to end' };
@@ -238,9 +253,19 @@ function endSession_(sessionName) {
 }
 
 function getActiveSession_() {
-  // 生徒のポーリングはシートを叩かずキャッシュ優先（ロック待ちで固まりやすいため）
   var cached = readActiveCache_();
-  if (cached && cached.sessionName) {
+
+  // 明示的に inactive ならシートを見ない（終了済みセッションの復活を防ぐ）
+  if (cached && cached.active === false) {
+    return {
+      ok: true,
+      active: false,
+      sessionName: null,
+      source: 'cache'
+    };
+  }
+
+  if (cached && cached.active === true && cached.sessionName) {
     return {
       ok: true,
       active: true,
@@ -250,13 +275,14 @@ function getActiveSession_() {
     };
   }
 
-  // キャッシュが空のときだけシートを確認
+  // キャッシュが空（旧形式含む）のときだけシートを確認
   var fromSheet = null;
   try {
     fromSheet = withSheetLock_(function () {
       var ss = getSpreadsheet_();
       var sessions = ss.getSheetByName(SESSIONS_SHEET);
       if (!sessions) {
+        setInactiveCache_();
         return { ok: true, active: false, sessionName: null, source: 'sheet' };
       }
       var data = sessions.getDataRange().getValues();
@@ -274,6 +300,7 @@ function getActiveSession_() {
           };
         }
       }
+      setInactiveCache_();
       return { ok: true, active: false, sessionName: null, source: 'sheet' };
     });
   } catch (err) {
@@ -299,8 +326,8 @@ function logTap_(sessionName, studentId, timestamp) {
   }
 
   var cached = readActiveCache_();
-  if (!cached || cached.sessionName !== sessionName) {
-    // キャッシュが無い/不一致ならシート確認にフォールバック
+  var cacheOk = cached && cached.active === true && cached.sessionName === sessionName;
+  if (!cacheOk) {
     var active = getActiveSession_();
     if (!active.active || active.sessionName !== sessionName) {
       return { ok: false, error: 'Session is not active', skipped: true };

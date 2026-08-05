@@ -12,6 +12,37 @@
     return getUrl().length > 0;
   }
 
+  function sleep(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  async function fetchOnce(url) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = null;
+    if (controller) {
+      timer = setTimeout(function () {
+        controller.abort();
+      }, REQUEST_TIMEOUT_MS);
+    }
+
+    try {
+      var response = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store',
+        signal: controller ? controller.signal : undefined,
+      });
+      var text = await response.text();
+      return { ok: true, text: text };
+    } catch (err) {
+      return { ok: false, err: err };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async function request(payload) {
     var base = getUrl();
     if (!base) {
@@ -25,52 +56,56 @@
       if (value == null) return;
       params.set(key, String(value));
     });
+    // スマホ等が GET をキャッシュして古いセッション状態を返すのを防ぐ
+    params.set('_ts', String(Date.now()));
+
     var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
 
-    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var timer = null;
-    if (controller) {
-      timer = setTimeout(function () {
-        controller.abort();
-      }, REQUEST_TIMEOUT_MS);
-    }
-
-    var response;
-    try {
-      response = await fetch(url, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: controller ? controller.signal : undefined,
-      });
-    } catch (err) {
-      if (err && err.name === 'AbortError') {
+    var attempt = await fetchOnce(url);
+    if (!attempt.ok) {
+      if (attempt.err && attempt.err.name === 'AbortError') {
         return {
           ok: false,
           error:
-            'Apps Script が応答しません（タイムアウト）。デプロイ URL か「全員」公開設定を確認してください。',
+            'Apps Script が応答しません（タイムアウト）。しばらくしてから再読み込みしてください。',
+          transient: true,
         };
       }
       return {
         ok: false,
-        error:
-          '通信に失敗しました（Failed to fetch）。Apps Script の公開設定が「全員」になっていないか、大学アカウント制限の可能性があります。README のトラブルシュートを確認してください。',
+        error: '通信に失敗しました。ネットワーク状態を確認して再試行してください。',
+        transient: true,
       };
-    } finally {
-      if (timer) clearTimeout(timer);
     }
 
-    var text = await response.text();
+    var text = attempt.text;
+    // Apps Script は稀に HTML（ログイン/エラー）を返すことがある → 1回だけ再試行
     if (/^\s*</.test(text)) {
-      return {
-        ok: false,
-        error:
-          'Apps Script がログイン画面／エラーページを返しました。ウェブアプリの「アクセスできるユーザー」を「全員」にし、新しいデプロイの /exec URL を config.js に反映してください。',
-      };
+      await sleep(500);
+      params.set('_ts', String(Date.now()));
+      url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
+      attempt = await fetchOnce(url);
+      if (!attempt.ok) {
+        return {
+          ok: false,
+          error: '通信に失敗しました。ネットワーク状態を確認して再試行してください。',
+          transient: true,
+        };
+      }
+      text = attempt.text;
+      if (/^\s*</.test(text)) {
+        return {
+          ok: false,
+          error: 'サーバーが一時的に不正な応答を返しました。自動で再試行します。',
+          transient: true,
+        };
+      }
     }
+
     try {
       return JSON.parse(text);
     } catch (err) {
-      return { ok: false, error: 'Invalid JSON response', raw: text.slice(0, 200) };
+      return { ok: false, error: 'Invalid JSON response', raw: text.slice(0, 200), transient: true };
     }
   }
 
