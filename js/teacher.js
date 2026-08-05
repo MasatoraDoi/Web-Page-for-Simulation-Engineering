@@ -43,8 +43,9 @@
       } else if (res && res.ok) {
         setActiveLabel(null);
         setStatus('', '');
+      } else if (res && res.transient) {
+        setStatus((res && res.error) || '通信が不安定です', 'warn');
       } else {
-        setActiveLabel(null);
         setStatus((res && res.error) || '状態の取得に失敗しました', 'error');
       }
     } catch (err) {
@@ -118,5 +119,5 @@
     el.sessionName.value = last;
   }
   refreshActive();
-  setInterval(refreshActive, 8000);
+  setInterval(refreshActive, 10000);
 })();

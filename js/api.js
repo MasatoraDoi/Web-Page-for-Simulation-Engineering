@@ -1,7 +1,8 @@
 (function (global) {
   'use strict';
 
-  var REQUEST_TIMEOUT_MS = 12000;
+  // Apps Script は 302 → googleusercontent のリダイレクトがあり、環境によって遅い
+  var REQUEST_TIMEOUT_MS = 25000;
 
   function getUrl() {
     var url = (global.APP_CONFIG && global.APP_CONFIG.APPS_SCRIPT_URL) || '';
@@ -18,6 +19,44 @@
     });
   }
 
+  async function fetchAppsScript(url, signal) {
+    // まず manual で Location を取り、本体 URL を直接叩く（follow のハング回避）
+    var first = await fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      cache: 'no-store',
+      signal: signal,
+    });
+
+    var target = null;
+    if (first.status >= 300 && first.status < 400) {
+      target = first.headers.get('Location');
+    }
+
+    if (target) {
+      var second = await fetch(target, {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store',
+        signal: signal,
+      });
+      return second.text();
+    }
+
+    // Location が読めない／リダイレクトなしの場合は従来どおり
+    if (first.type === 'opaqueredirect' || first.status === 0) {
+      var followed = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        cache: 'no-store',
+        signal: signal,
+      });
+      return followed.text();
+    }
+
+    return first.text();
+  }
+
   async function fetchOnce(url) {
     var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var timer = null;
@@ -28,13 +67,7 @@
     }
 
     try {
-      var response = await fetch(url, {
-        method: 'GET',
-        redirect: 'follow',
-        cache: 'no-store',
-        signal: controller ? controller.signal : undefined,
-      });
-      var text = await response.text();
+      var text = await fetchAppsScript(url, controller ? controller.signal : undefined);
       return { ok: true, text: text };
     } catch (err) {
       return { ok: false, err: err };
@@ -49,14 +82,12 @@
       return { ok: false, error: 'APPS_SCRIPT_URL が未設定です' };
     }
 
-    // 個人 Gmail のウェブアプリでも POST が 405 になることがあるため GET を使う
     var params = new URLSearchParams();
     Object.keys(payload || {}).forEach(function (key) {
       var value = payload[key];
       if (value == null) return;
       params.set(key, String(value));
     });
-    // スマホ等が GET をキャッシュして古いセッション状態を返すのを防ぐ
     params.set('_ts', String(Date.now()));
 
     var url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
@@ -79,9 +110,8 @@
     }
 
     var text = attempt.text;
-    // Apps Script は稀に HTML（ログイン/エラー）を返すことがある → 1回だけ再試行
     if (/^\s*</.test(text)) {
-      await sleep(500);
+      await sleep(400);
       params.set('_ts', String(Date.now()));
       url = base + (base.indexOf('?') >= 0 ? '&' : '?') + params.toString();
       attempt = await fetchOnce(url);

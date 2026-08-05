@@ -118,7 +118,7 @@ function readActiveCache_() {
 
 function withSheetLock_(fn) {
   var lock = LockService.getScriptLock();
-  var got = lock.tryLock(5000);
+  var got = lock.tryLock(2000);
   if (!got) {
     throw new Error('Spreadsheet is busy. Retry shortly.');
   }
@@ -176,80 +176,94 @@ function startSession_(sessionName) {
 
   var now = new Date().toISOString();
 
-  withSheetLock_(function () {
-    var sessions = ensureSessionsSheet_();
-    ensureTapSheet_(sessionName);
+  // シート書き込みより先にキャッシュ更新（生徒がすぐ状態を取れる／開始がタイムアウトしにくくなる）
+  setActiveCache_(sessionName, now);
 
-    var data = sessions.getDataRange().getValues();
+  var sheetWarning = null;
+  try {
+    withSheetLock_(function () {
+      var sessions = ensureSessionsSheet_();
+      // タブ作成は初回タップ時に行う（開始を速くする）
 
-    // 既存の active をすべて終了
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][1] === 'active') {
-        sessions.getRange(i + 1, 2).setValue('ended');
-        if (!data[i][3]) {
-          sessions.getRange(i + 1, 4).setValue(now);
+      var data = sessions.getDataRange().getValues();
+
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][1] === 'active') {
+          sessions.getRange(i + 1, 2).setValue('ended');
+          if (!data[i][3]) {
+            sessions.getRange(i + 1, 4).setValue(now);
+          }
         }
       }
-    }
 
-    // 同名セッションがあれば再利用して active に戻す
-    var reused = false;
-    for (var j = 1; j < data.length; j++) {
-      if (String(data[j][0]) === sessionName) {
-        sessions.getRange(j + 1, 2).setValue('active');
-        sessions.getRange(j + 1, 3).setValue(now);
-        sessions.getRange(j + 1, 4).setValue('');
-        reused = true;
-        break;
+      var reused = false;
+      for (var j = 1; j < data.length; j++) {
+        if (String(data[j][0]) === sessionName) {
+          sessions.getRange(j + 1, 2).setValue('active');
+          sessions.getRange(j + 1, 3).setValue(now);
+          sessions.getRange(j + 1, 4).setValue('');
+          reused = true;
+          break;
+        }
       }
-    }
 
-    if (!reused) {
-      sessions.appendRow([sessionName, 'active', now, '']);
-    }
+      if (!reused) {
+        sessions.appendRow([sessionName, 'active', now, '']);
+      }
+    });
+  } catch (err) {
+    sheetWarning = String(err);
+  }
 
-    SpreadsheetApp.flush();
-  });
-
-  setActiveCache_(sessionName, now);
   return {
     ok: true,
     sessionName: sessionName,
     sheetName: sanitizeSheetName_(sessionName),
     status: 'active',
-    startedAt: now
+    startedAt: now,
+    warning: sheetWarning
   };
 }
 
 function endSession_(sessionName) {
   sessionName = String(sessionName || '').trim();
   var now = new Date().toISOString();
-  var ended = null;
 
-  withSheetLock_(function () {
-    var sessions = ensureSessionsSheet_();
-    var data = sessions.getDataRange().getValues();
-
-    for (var i = 1; i < data.length; i++) {
-      var name = String(data[i][0]);
-      var status = data[i][1];
-      if (status !== 'active') continue;
-      if (sessionName && name !== sessionName) continue;
-
-      sessions.getRange(i + 1, 2).setValue('ended');
-      sessions.getRange(i + 1, 4).setValue(now);
-      ended = name;
-    }
-
-    SpreadsheetApp.flush();
-  });
-
+  // 先に inactive を書いて、終了後の「まだ記録中」を防ぐ
   setInactiveCache_();
 
-  if (!ended) {
+  var ended = null;
+  var sheetWarning = null;
+  try {
+    withSheetLock_(function () {
+      var sessions = ensureSessionsSheet_();
+      var data = sessions.getDataRange().getValues();
+
+      for (var i = 1; i < data.length; i++) {
+        var name = String(data[i][0]);
+        var status = data[i][1];
+        if (status !== 'active') continue;
+        if (sessionName && name !== sessionName) continue;
+
+        sessions.getRange(i + 1, 2).setValue('ended');
+        sessions.getRange(i + 1, 4).setValue(now);
+        ended = name;
+      }
+    });
+  } catch (err) {
+    sheetWarning = String(err);
+  }
+
+  if (!ended && !sheetWarning) {
     return { ok: false, error: 'No active session to end' };
   }
-  return { ok: true, sessionName: ended, status: 'ended', endedAt: now };
+  return {
+    ok: true,
+    sessionName: ended || sessionName || null,
+    status: 'ended',
+    endedAt: now,
+    warning: sheetWarning
+  };
 }
 
 function getActiveSession_() {
@@ -341,7 +355,6 @@ function logTap_(sessionName, studentId, timestamp) {
     var tap = ensureTapSheet_(sessionName);
     sheetName = tap.sheetName;
     tap.sheet.appendRow([studentId, timestamp, recordedAt]);
-    SpreadsheetApp.flush();
   });
 
   return {

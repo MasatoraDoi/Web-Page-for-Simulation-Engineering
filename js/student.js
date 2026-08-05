@@ -3,7 +3,7 @@
 
   var ID_KEY = 'firefly_student_id';
   var VOL_KEY = 'firefly_volume';
-  var POLL_MS = 5000;
+  var POLL_MS = 8000;
 
   var activeSession = null;
   var sending = false;
