@@ -1,0 +1,180 @@
+/**
+ * ホタル共振アプリ用 Google Apps Script
+ *
+ * 使い方:
+ * 1. 新しい Google スプレッドシートを作成
+ * 2. 拡張機能 → Apps Script を開き、このファイルの内容を貼り付け
+ * 3. デプロイ → 新しいデプロイ → 種類: ウェブアプリ
+ *    - 実行ユーザー: 自分
+ *    - アクセスできるユーザー: 全員
+ * 4. 発行された URL を js/config.js の APPS_SCRIPT_URL に設定
+ */
+
+var SESSIONS_SHEET = 'Sessions';
+var TAPS_SHEET = 'Taps';
+
+function doGet(e) {
+  return handleRequest(e);
+}
+
+function doPost(e) {
+  return handleRequest(e);
+}
+
+function handleRequest(e) {
+  try {
+    var params = {};
+    if (e && e.postData && e.postData.contents) {
+      params = JSON.parse(e.postData.contents);
+    } else if (e && e.parameter) {
+      params = e.parameter;
+    }
+
+    var action = params.action || '';
+    var result;
+
+    switch (action) {
+      case 'startSession':
+        result = startSession_(params.sessionName);
+        break;
+      case 'endSession':
+        result = endSession_(params.sessionName);
+        break;
+      case 'getActiveSession':
+        result = getActiveSession_();
+        break;
+      case 'logTap':
+        result = logTap_(params.sessionName, params.studentId, params.timestamp);
+        break;
+      case 'ping':
+        result = { ok: true, message: 'ok' };
+        break;
+      default:
+        result = { ok: false, error: 'Unknown action: ' + action };
+    }
+
+    return jsonResponse_(result);
+  } catch (err) {
+    return jsonResponse_({ ok: false, error: String(err) });
+  }
+}
+
+function jsonResponse_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getSpreadsheet_() {
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
+
+function ensureSheets_() {
+  var ss = getSpreadsheet_();
+  var sessions = ss.getSheetByName(SESSIONS_SHEET);
+  if (!sessions) {
+    sessions = ss.insertSheet(SESSIONS_SHEET);
+    sessions.appendRow(['sessionName', 'status', 'startedAt', 'endedAt']);
+  }
+  var taps = ss.getSheetByName(TAPS_SHEET);
+  if (!taps) {
+    taps = ss.insertSheet(TAPS_SHEET);
+    taps.appendRow(['sessionName', 'studentId', 'timestamp', 'recordedAt']);
+  }
+  return { sessions: sessions, taps: taps };
+}
+
+function startSession_(sessionName) {
+  sessionName = String(sessionName || '').trim();
+  if (!sessionName) {
+    return { ok: false, error: 'sessionName is required' };
+  }
+
+  var sheets = ensureSheets_();
+  var data = sheets.sessions.getDataRange().getValues();
+  var now = new Date().toISOString();
+
+  // 既存の active をすべて終了
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] === 'active') {
+      sheets.sessions.getRange(i + 1, 2).setValue('ended');
+      if (!data[i][3]) {
+        sheets.sessions.getRange(i + 1, 4).setValue(now);
+      }
+    }
+  }
+
+  // 同名セッションがあれば再利用して active に戻す
+  for (var j = 1; j < data.length; j++) {
+    if (String(data[j][0]) === sessionName) {
+      sheets.sessions.getRange(j + 1, 2).setValue('active');
+      sheets.sessions.getRange(j + 1, 3).setValue(now);
+      sheets.sessions.getRange(j + 1, 4).setValue('');
+      return { ok: true, sessionName: sessionName, status: 'active', startedAt: now };
+    }
+  }
+
+  sheets.sessions.appendRow([sessionName, 'active', now, '']);
+  return { ok: true, sessionName: sessionName, status: 'active', startedAt: now };
+}
+
+function endSession_(sessionName) {
+  sessionName = String(sessionName || '').trim();
+  var sheets = ensureSheets_();
+  var data = sheets.sessions.getDataRange().getValues();
+  var now = new Date().toISOString();
+  var ended = null;
+
+  for (var i = 1; i < data.length; i++) {
+    var name = String(data[i][0]);
+    var status = data[i][1];
+    if (status !== 'active') continue;
+    if (sessionName && name !== sessionName) continue;
+
+    sheets.sessions.getRange(i + 1, 2).setValue('ended');
+    sheets.sessions.getRange(i + 1, 4).setValue(now);
+    ended = name;
+  }
+
+  if (!ended) {
+    return { ok: false, error: 'No active session to end' };
+  }
+  return { ok: true, sessionName: ended, status: 'ended', endedAt: now };
+}
+
+function getActiveSession_() {
+  var sheets = ensureSheets_();
+  var data = sheets.sessions.getDataRange().getValues();
+
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (data[i][1] === 'active') {
+      return {
+        ok: true,
+        active: true,
+        sessionName: String(data[i][0]),
+        startedAt: data[i][2] ? new Date(data[i][2]).toISOString() : null
+      };
+    }
+  }
+  return { ok: true, active: false, sessionName: null };
+}
+
+function logTap_(sessionName, studentId, timestamp) {
+  sessionName = String(sessionName || '').trim();
+  studentId = String(studentId || '').trim();
+  timestamp = String(timestamp || '').trim();
+
+  if (!sessionName || !studentId || !timestamp) {
+    return { ok: false, error: 'sessionName, studentId, timestamp are required' };
+  }
+
+  var active = getActiveSession_();
+  if (!active.active || active.sessionName !== sessionName) {
+    return { ok: false, error: 'Session is not active', skipped: true };
+  }
+
+  var sheets = ensureSheets_();
+  var recordedAt = new Date().toISOString();
+  sheets.taps.appendRow([sessionName, studentId, timestamp, recordedAt]);
+  return { ok: true, sessionName: sessionName, studentId: studentId, timestamp: timestamp };
+}

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ホタル共振 | 生徒</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="brand">Firefly Sync</div>
+      <h1>ホタルの光の共振</h1>
+      <p class="lead">ボタンを押すと音が鳴ります。教員がセッションを開始しているときだけ、押した時刻が記録されます。</p>
+
+      <p id="config-warn" class="status warn hidden">
+        記録サーバーが未設定です。音は使えますが、データは保存されません。
+      </p>
+
+      <section id="setup-panel" class="panel stack">
+        <div>
+          <label for="student-id">自分の ID（数字のみ）</label>
+          <input
+            id="student-id"
+            type="tel"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            placeholder="例: 12"
+            autocomplete="off"
+          />
+        </div>
+        <button id="save-id" type="button">はじめる</button>
+        <p id="setup-status" class="status"></p>
+      </section>
+
+      <section id="main-panel" class="panel stack hidden">
+        <div class="meta">
+          <span id="id-label">ID: -</span>
+          <button id="change-id" class="secondary" type="button">IDを変更</button>
+        </div>
+
+        <p id="session-status" class="status">セッションを確認中…</p>
+
+        <div class="tap-area">
+          <button id="tap-btn" class="tap-btn" type="button">光る</button>
+        </div>
+
+        <div class="slider-wrap">
+          <label for="volume">音量 <span id="volume-label">50%</span></label>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.5" />
+        </div>
+      </section>
+
+      <p class="footer-link"><a href="teacher.html">教員用ページへ</a></p>
+    </main>
+
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/sound.js"></script>
+    <script src="js/student.js"></script>
+  </body>
+</html>

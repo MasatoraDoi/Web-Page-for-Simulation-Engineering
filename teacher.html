@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ホタル共振 | 教員</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <div class="brand">Teacher</div>
+      <h1>セッション管理</h1>
+      <p class="lead">
+        セッション名を入力して開始すると、生徒のタップ時刻がスプレッドシートに保存されます。終了を押すと記録を止めます。
+      </p>
+
+      <p id="config-warn" class="status warn hidden">
+        js/config.js の APPS_SCRIPT_URL が未設定です。README の手順で Google Apps Script を接続してください。
+      </p>
+
+      <section class="panel stack">
+        <div>
+          <label for="session-name">セッション名</label>
+          <input
+            id="session-name"
+            type="text"
+            placeholder="例: 第3回実験"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="row">
+          <button id="start-btn" type="button">開始</button>
+          <button id="end-btn" class="danger" type="button">終了</button>
+          <button id="refresh-btn" class="secondary" type="button">状態更新</button>
+        </div>
+
+        <p id="active-session" class="status">状態を確認中…</p>
+        <p id="teacher-status" class="status"></p>
+      </section>
+
+      <p class="footer-link"><a href="index.html">生徒用ページへ</a></p>
+    </main>
+
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/teacher.js"></script>
+  </body>
+</html>
