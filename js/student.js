@@ -111,7 +111,11 @@
   }
 
   async function onTap() {
-    FireflySound.play();
+    try {
+      await FireflySound.play();
+    } catch (err) {
+      // 音声失敗でも記録は続行
+    }
     el.tap.classList.add('flash');
     setTimeout(function () {
       el.tap.classList.remove('flash');
@@ -147,6 +151,8 @@
     }
     localStorage.setItem(ID_KEY, id);
     setStatus(el.setupStatus, '', '');
+    // iOS: このユーザー操作で AudioContext を有効化
+    FireflySound.unlock();
     showMain(id);
     startWatchingSession();
   });
@@ -162,11 +168,12 @@
   });
 
   el.volume.addEventListener('input', function () {
+    FireflySound.unlock();
     applyVolume(el.volume.value);
   });
 
-  el.tap.addEventListener('pointerdown', function (e) {
-    e.preventDefault();
+  // click の方が iOS で音声解除・再生に安定（pointerdown+preventDefault は避ける）
+  el.tap.addEventListener('click', function () {
     onTap();
   });
 
